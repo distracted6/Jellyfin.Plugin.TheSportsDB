@@ -61,6 +61,23 @@ public class TheSportsDbClient
         return await GetJsonAsync<RootObject>(url, cancellationToken);
     }
 
+    /// <summary>
+    /// searchevents.php with a date filter, e.g.
+    /// <c>searchevents.php?e=Toronto_Maple_Leafs_vs_New_York_Islanders&amp;d=2026-09-30</c>.
+    /// Unlike eventsday.php this is not capped at 3 results on the free key, because it is
+    /// filtered by team names rather than returning every event in the league for that day.
+    /// TheSportsDB expects spaces in the event name to be underscores, and the name is
+    /// normally "Home vs Away".
+    /// </summary>
+    public async Task<RootObject?> SearchEventsByTeamsAndDateAsync(
+        string homeTeam, string awayTeam, DateTime date, CancellationToken cancellationToken)
+    {
+        var query = $"{homeTeam.Trim()} vs {awayTeam.Trim()}".Replace(' ', '_');
+        var d = date.ToString("yyyy-MM-dd");
+        var url = $"{BaseUrl}/searchevents.php?e={Uri.EscapeDataString(query)}&d={d}";
+        return await GetJsonAsync<RootObject>(url, cancellationToken);
+    }
+
     public async Task<RootObject?> GetEventsBySeasonAsync(string leagueId, string season, CancellationToken cancellationToken)
     {
         var url = $"{BaseUrl}/eventsseason.php?id={leagueId}&s={Uri.EscapeDataString(season)}";

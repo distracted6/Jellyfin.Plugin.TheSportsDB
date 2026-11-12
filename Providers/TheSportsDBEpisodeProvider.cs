@@ -274,6 +274,7 @@ namespace Jellyfin.Plugin.TheSportsDB.Providers
 
             string? teamA = null, teamB = null;
             bool hyphen = false;
+            bool firstIsAway = false; // true for "AWAY@HOME" filenames
 
             var vsIdx = cleanName.IndexOf(" vs ", StringComparison.OrdinalIgnoreCase);
             var atIdx = cleanName.IndexOf("@", StringComparison.OrdinalIgnoreCase);
@@ -291,8 +292,11 @@ namespace Jellyfin.Plugin.TheSportsDB.Providers
                 // @ format = away @ home
                 string awayAbbr = cleanName.Substring(0, atIdx).Trim();
                 string homeAbbr = cleanName.Substring(atIdx + 1).Trim();
+                _logger.LogInformation("TheSportsDB: DB diag away \"{X}\": {D}", awayAbbr, _sportsResolverDb.DescribeTeamLookup(awayAbbr, leagueId));
+                _logger.LogInformation("TheSportsDB: DB diag home \"{X}\": {D}", homeAbbr, _sportsResolverDb.DescribeTeamLookup(homeAbbr, leagueId));
                 teamA = _sportsResolverDb.GetTeamFullName(awayAbbr, leagueId) ?? awayAbbr;
                 teamB = _sportsResolverDb.GetTeamFullName(homeAbbr, leagueId) ?? homeAbbr;
+                firstIsAway = true;
                 _logger.LogInformation("TheSportsDB: Teams (@): \"{A}\" @ \"{B}\"", teamA, teamB);
             }
             else
@@ -311,6 +315,24 @@ namespace Jellyfin.Plugin.TheSportsDB.Providers
                           _logger.LogInformation("TheSportsDB: Teams (hyphen): \"{A}\" vs \"{B}\"", teamA, teamB); }
                     }
                 }
+            }
+
+            // NEW: searchevents.php?e=Home_vs_Away&d=date (not limited to 3 results like eventsday.php).
+            if (!string.IsNullOrEmpty(teamA) && !string.IsNullOrEmpty(teamB))
+            {
+                // "AWAY@HOME" -> home is the second team. For "A vs B" / "A-B" assume home first.
+                string homeTeam = firstIsAway ? teamB : teamA;
+                string awayTeam = firstIsAway ? teamA : teamB;
+
+                var found = await FindEventBySearchAsync(homeTeam, awayTeam, leagueId, fileDate, cancellationToken).ConfigureAwait(false);
+                if (found != null) return found;
+
+                if (!EnableEventsDayFallback)
+                {
+                    _logger.LogWarning("TheSportsDB: No searchevents match in +-2d for \"{Raw}\".", rawFilename);
+                    return null;
+                }
+                _logger.LogInformation("TheSportsDB: searchevents found nothing; falling back to eventsday.");
             }
 
             foreach (int offset in new[] { 0, 1, -1, 2, -2 })
@@ -402,6 +424,58 @@ namespace Jellyfin.Plugin.TheSportsDB.Providers
             }
 
             _logger.LogWarning("TheSportsDB: No match in +-2d for \"{Raw}\".", rawFilename);
+            return null;
+        }
+
+        // If true, the old eventsday.php scan (+-2 days) still runs when searchevents finds nothing.
+        // This keeps non-team events (F1, UFC, etc.) working. Set to false to stop after searchevents.
+        private const bool EnableEventsDayFallback = true;
+
+        private static bool TeamNameMatches(string evTeam, string fileTeam) =>
+            (evTeam.Length >= 3 && fileTeam.Length >= 3)
+                ? (evTeam.Contains(fileTeam, StringComparison.OrdinalIgnoreCase) ||
+                   fileTeam.Contains(evTeam, StringComparison.OrdinalIgnoreCase))
+                : string.Equals(evTeam, fileTeam, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Looks up "Home_vs_Away" via searchevents.php for the file date, then +1, -1, +2, -2 days.
+        /// For each day the expected home/away order is tried first, then the reverse
+        /// (filenames and TheSportsDB don't always agree on who is home).
+        /// </summary>
+        private async Task<Event?> FindEventBySearchAsync(
+            string homeTeam, string awayTeam, string leagueId,
+            DateTime fileDate, CancellationToken cancellationToken)
+        {
+            foreach (int offset in new[] { 0, 1, -1, 2, -2 })
+            {
+                var day = fileDate.AddDays(offset);
+
+                foreach (var (h, a) in new[] { (homeTeam, awayTeam), (awayTeam, homeTeam) })
+                {
+                    var sr = await _client.SearchEventsByTeamsAndDateAsync(h, a, day, cancellationToken).ConfigureAwait(false);
+                    var evList = sr?.events ?? sr?.@event;
+                    if (evList == null || evList.Count == 0) continue;
+
+                    // Verify the teams actually match (search is fuzzy) and prefer the mapped league.
+                    var candidates = evList.Where(ev =>
+                        !string.IsNullOrEmpty(ev.strHomeTeam) && !string.IsNullOrEmpty(ev.strAwayTeam) &&
+                        ((TeamNameMatches(ev.strHomeTeam!, homeTeam) && TeamNameMatches(ev.strAwayTeam!, awayTeam)) ||
+                         (TeamNameMatches(ev.strHomeTeam!, awayTeam) && TeamNameMatches(ev.strAwayTeam!, homeTeam))))
+                        .ToList();
+                    if (candidates.Count == 0) continue;
+
+                    var match = candidates.FirstOrDefault(ev =>
+                                    string.Equals(ev.idLeague, leagueId, StringComparison.OrdinalIgnoreCase))
+                                ?? candidates[0];
+
+                    _logger.LogInformation(
+                        "TheSportsDB: searchevents match (offset {Off}d): \"{E}\" ({Date}) id={Id}",
+                        offset, match.strEvent, match.dateEvent, match.idEvent);
+                    return match;
+                }
+            }
+
+            _logger.LogInformation("TheSportsDB: searchevents: no match for {H} vs {A} within +-2d.", homeTeam, awayTeam);
             return null;
         }
 
