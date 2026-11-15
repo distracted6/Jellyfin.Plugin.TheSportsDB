@@ -9,6 +9,14 @@
         "imageUrl":  "https://raw.githubusercontent.com/retrorat1/Jellyfin.Plugin.TheSportsDB/main/thumb.png",
         "versions":  [
                          {
+                             "version":  "3.0.0.0",
+                             "changelog":  "More accurate game lookup",
+                             "targetAbi":  "10.0.0.0",
+                             "sourceUrl":  "https://github.com/distracted6/Jellyfin.Plugin.TheSportsDB/releases/download/v3.0.0.0/Jellyfin.Plugin.TheSportsDB.zip",
+                             "checksum":  "78F4881863B69C52CA0D4E1A4A72F3B1",
+                             "timestamp":  "2026-011-15T16:20:20Z"
+                         },
+						 {
                              "version":  "2.0.17.0",
                              "changelog":  "Multi-league team support (team_leagues) and refreshed sports_resolver.db from TheSportsDB",
                              "targetAbi":  "10.0.0.0",
